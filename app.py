@@ -6,76 +6,99 @@ import re
 import io
 from PIL import Image, ImageOps
 
-# إعدادات واجهة الموقع
-st.set_page_config(page_title="Data Extractor Pro", layout="wide", page_icon="🔍")
+# 1. إعدادات الصفحة والألوان (حل مشكلة بياض النص)
+st.set_page_config(page_title="PDF Data Pro", layout="wide", page_icon="📊")
 
-# CSS بسيط لتحسين المظهر
 st.markdown("""
     <style>
-    .stApp { background-color: #fafafa; }
-    .css-154489f { background-color: #007bff; }
+    /* تأمين ظهور النصوص بالألوان الصحيحة */
+    .main { background-color: #ffffff; }
+    h1, h2, h3, p, span, label, .stMarkdown {
+        color: #262730 !important;
+    }
+    .stButton>button {
+        background-color: #007bff;
+        color: white !important;
+        font-weight: bold;
+    }
+    /* تحسين شكل الجدول */
+    .stDataFrame { border: 1px solid #e6e9ef; border-radius: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-st.title("📄 مستخرج البيانات الذكي من الـ PDF")
-st.subheader("تحويل ملفات السكان (Scanned) إلى جداول إكسيل بدقة عالية")
+# 2. دوال مساعدة لاستخراج البيانات بذكاء (Regex)
+def extract_info(text):
+    # أنماط بحث مطورة للأسماء العربية والإنجليزية
+    name_match = re.search(r"(?:الاسم|مريض|عميل|Name|Customer|Patient)\s*[:\-]\s*([\u0621-\u064A\s\w]+)", text)
+    # أنماط بحث عن التواريخ بمختلف الأشكال
+    date_match = re.search(r"(\d{1,4}[-/]\d{1,2}[-/]\d{2,4})", text)
+    # أنماط بحث عن المبالغ المالية
+    amount_match = re.search(r"(?:المبلغ|إجمالي|Total|Amount|Price)\s*[:\-]\s*([\d,.]+)", text)
+    
+    return {
+        "الاسم": name_match.group(1).strip() if name_match else "غير موجود",
+        "التاريخ": date_match.group(1).strip() if date_match else "غير موجود",
+        "المبلغ": amount_match.group(1).strip() if amount_match else "0.00"
+    }
 
-uploaded_file = st.file_uploader("قم بسحب وإفلات ملف الـ PDF هنا", type="pdf")
+# 3. واجهة المستخدم
+st.title("📄 مستخرج البيانات المطور (النسخة النهائية)")
+st.write("ارفع ملف الـ PDF (المسحوب سكان) وسنقوم بتحويله لجدول بيانات.")
+
+uploaded_file = st.file_uploader("اختر ملف PDF من هاتفك", type="pdf")
 
 if uploaded_file:
-    # 1. تحويل الملف لصور
-    with st.spinner('جاري قراءة صفحات الملف...'):
-        images = convert_from_bytes(uploaded_file.read())
-    
-    st.success(f"تم تحميل {len(images)} صفحة بنجاح!")
-    
-    final_results = []
-
-    # 2. معالجة كل صفحة
-    for i, img in enumerate(images):
-        with st.expander(f"تفاصيل الصفحة {i+1}", expanded=(i==0)):
-            # تحسين جودة الصورة (Preprocessing)
+    # تحويل PDF لصور
+    with st.spinner('جاري معالجة الملف بتقنية OCR...'):
+        pdf_bytes = uploaded_file.read()
+        images = convert_from_bytes(pdf_bytes)
+        
+        all_data = []
+        
+        # إنشاء تبويبات لعرض النتائج
+        tab1, tab2 = st.tabs(["📊 البيانات المستخرجة", "🖼️ معاينة الصفحات"])
+        
+        for i, img in enumerate(images):
+            # تحسين الصورة للقراءة
             img_gray = ImageOps.grayscale(img)
-            img_clean = ImageOps.autocontrast(img_gray)
+            img_processed = ImageOps.autocontrast(img_gray)
             
-            # قراءة النص (يدعم العربي والإنجليزي)
-            text = pytesseract.image_to_string(img_clean, lang='ara+eng')
+            # استخراج النص (يدعم العربية والانجليزية)
+            raw_text = pytesseract.image_to_string(img_processed, lang='ara+eng')
             
-            # محرك البحث عن البيانات (Regex)
-            # تقدر تعدل الكلمات دي (الاسم، التاريخ، المبلغ) حسب ملفاتك
-            name = re.search(r"(?:الاسم|Name|السيد|Customer)\s*[:\-]\s*([\u0621-\u064A\s\w]+)", text)
-            date = re.search(r"(\d{1,4}[-/]\d{1,2}[-/]\d{2,4})", text)
-            amount = re.search(r"(?:المبلغ|Total|Amount|السعر)\s*[:\-]\s*([\d,.]+)", text)
-
-            extracted_row = {
-                "الصفحة": i + 1,
-                "الاسم": name.group(1).strip() if name else "غير موجود",
-                "التاريخ": date.group(1).strip() if date else "غير موجود",
-                "المبلغ": amount.group(1).strip() if amount else "0.00"
-            }
-            final_results.append(extracted_row)
+            # استخراج البيانات المحددة
+            extracted = extract_info(raw_text)
+            extracted["الصفحة"] = i + 1
+            all_data.append(extracted)
             
-            # عرض المعاينة
-            col1, col2 = st.columns([1, 2])
-            col1.image(img_clean, caption="الصورة المعالجة")
-            col2.text_area(f"النص المستخرج من صفحة {i+1}", text, height=200)
+            with tab2:
+                st.image(img_processed, caption=f"صفحة رقم {i+1}", width=400)
+                st.text_area(f"النص المستخرج (صفحة {i+1})", raw_text, height=100)
 
-    # 3. عرض الجدول النهائي القابل للتعديل
-    st.divider()
-    st.header("📝 مراجعة وتعديل البيانات")
-    st.info("يمكنك الضغط على أي خلية لتعديل النص يدوياً قبل التحميل")
-    
-    df = pd.DataFrame(final_results)
-    edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+        # تحويل النتائج لجدول
+        df = pd.DataFrame(all_data)
+        
+        with tab1:
+            st.subheader("📝 راجع البيانات وعدلها إذا لزم الأمر")
+            # جدول تفاعلي يسمح بالتعديل اليدوي قبل التحميل
+            edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+            
+            # تجهيز ملف الاكسيل
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                edited_df.to_excel(writer, index=False, sheet_name='Sheet1')
+            
+            st.divider()
+            st.download_button(
+                label="📥 تحميل ملف Excel الجاهز",
+                data=buffer.getvalue(),
+                file_name="Extracted_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-    # 4. زر التحميل لـ Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        edited_df.to_excel(writer, index=False)
-    
-    st.download_button(
-        label="📥 تحميل ملف Excel النهائي",
-        data=output.getvalue(),
-        file_name="Extracted_Data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+else:
+    st.warning("⚠️ في انتظار رفع ملف PDF للبدء...")
+
+# تعليمات جانبية
+st.sidebar.header("عن الأداة")
+st.sidebar.info("هذه الأداة تستخدم محرك Tesseract OCR للتعرف على الحروف العربية والانجليزية من الصور والملفات الممسوحة ضوئياً.")
