@@ -1,5 +1,6 @@
 streamlit
-pytesseract
+google-cloud-vision
+google-auth
 pdf2image
 pandas
 xlsxwriter
