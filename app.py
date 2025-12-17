@@ -3,114 +3,146 @@ import pandas as pd
 import re
 import io
 import json
+import pytesseract
+import pdfplumber
 from google.cloud import vision
 from google.oauth2 import service_account
 from pdf2image import convert_from_bytes
+from PIL import Image, ImageOps
 
-# 1. إعدادات الصفحة والتصميم
-st.set_page_config(page_title="Google AI OCR Pro", layout="wide", page_icon="🚀")
+# 1. إعدادات الصفحة بتصميم احترافي
+st.set_page_config(page_title="Ultra AI Document Studio", layout="wide", page_icon="🧬")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #f8f9fa; }
-    h1, h2, h3 { color: #1e1e1e !important; }
-    .stDataFrame { background-color: white; border-radius: 10px; }
+    .stApp { background-color: #f0f2f6; }
+    .status-active { color: #28a745; font-weight: bold; }
+    .status-fallback { color: #fd7e14; font-weight: bold; }
+    div[data-testid="stExpander"] { background-color: white !important; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. وظيفة الربط مع جوجل (باستخدام Secrets)
-def get_vision_client():
+# 2. وظيفة الربط مع جوجل (المستوى الأول)
+def get_google_client():
     try:
         if "GCP_JSON" in st.secrets:
-            # تنظيف النص لضمان عدم وجود أخطاء JSON
-            json_text = st.secrets["GCP_JSON"].strip()
-            info = json.loads(json_text)
+            info = json.loads(st.secrets["GCP_JSON"].strip(), strict=False)
             creds = service_account.Credentials.from_service_account_info(info)
             return vision.ImageAnnotatorClient(credentials=creds)
-    except Exception as e:
-        st.error(f"Error in Google Credentials: {e}")
+    except:
+        return None
     return None
 
-# 3. وظيفة استخراج البيانات الذكية
-def extract_data(image_bytes, client):
-    image = vision.Image(content=image_bytes)
-    # استخدام تقنية التعرف على المستندات (أفضل للسكان)
-    response = client.document_text_detection(image=image)
-    full_text = response.full_text_annotation.text
-    
-    # محرك البحث عن الأنماط (Regex) - قابل للتطوير
-    # يبحث عن الاسم بعد كلمات مفتاحية أو كنمط اسم
-    name_match = re.search(r"(?:Name|الاسم|السيد|مريض|Customer)\s*[:\-]?\s*([a-zA-Z\s\u0621-\u064A]{3,35})", full_text)
-    # يبحث عن أي تاريخ
-    date_match = re.search(r"(\d{1,4}[-/]\d{1,2}[-/]\d{2,4})", full_text)
-    
-    return {
-        "Name": name_match.group(1).strip() if name_match else "Not Detected",
-        "Date": date_match.group(1).strip() if date_match else "Not Detected",
-        "RawText": full_text
-    }
+# 3. محرك الـ NLP المتقدم لاستخراج البيانات
+def advanced_nlp_extractor(text):
+    results = {}
+    # استخراج الأسماء بنمط NLP (بحث عن أنماط السيد/الدكتور أو كلمات كابيتال)
+    name_patterns = [
+        r"(?:Name|Customer|الاسم|السيد|مريض)\s*[:\-]?\s*([a-zA-Z\s\u0621-\u064A]{3,35})",
+        r"(?<=Name\s)([A-Z][a-z]+\s[A-Z][a-z]+)",
+        r"([\u0621-\u064A]{3,}\s[\u0621-\u064A]{3,}\s[\u0621-\u064A]{3,})"
+    ]
+    # استخراج التواريخ
+    date_pattern = r"(\d{1,4}[-/]\d{1,2}[-/]\d{2,4})"
+    # استخراج المبالغ (Currency Extraction)
+    money_pattern = r"(?:Total|Amount|المبلغ|Price|EGP|\$)\s*[:\-]?\s*([\d,]+\.?\d*)"
 
-# 4. الواجهة الرئيسية
-st.title("🚀 Google AI Document Intelligence")
-st.subheader("Transform Scanned PDFs into Clean Excel Data")
+    for key, patterns in [("Name", name_patterns), ("Date", [date_pattern]), ("Amount", [money_pattern])]:
+        results[key] = "Not Found"
+        for p in (patterns if isinstance(patterns, list) else [patterns]):
+            match = re.search(p, text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                results[key] = match.group(1).strip()
+                break
+    return results
 
-client = get_vision_client()
+# 4. وظيفة الـ Fallback (Tesseract)
+def fallback_ocr(image):
+    # تحسين الصورة قبل المعالجة المحلية
+    gray = ImageOps.grayscale(image)
+    clean = ImageOps.autocontrast(gray)
+    return pytesseract.image_to_string(clean, lang='eng+ara')
 
+# 5. الواجهة الرئيسية
+st.title("🧬 Ultra AI Document Intelligence")
+st.write("Hybrid Processing: Google Vision AI + Tesseract Local Fallback")
+
+# فحص حالة المحركات
+client = get_google_client()
 if client:
-    uploaded_file = st.file_uploader("Upload File (PDF, JPG, PNG)", type=["pdf", "jpg", "png", "jpeg"])
+    st.markdown("API Status: <span class='status-active'>Google Cloud AI (Enabled)</span>", unsafe_allow_html=True)
+else:
+    st.markdown("API Status: <span class='status-fallback'>Tesseract Local (Fallback Mode)</span>", unsafe_allow_html=True)
+
+uploaded_file = st.file_uploader("Upload Document (PDF, Images)", type=["pdf", "png", "jpg", "jpeg"])
+
+if uploaded_file:
+    final_data = []
     
-    if uploaded_file:
-        with st.spinner('AI is reading document layers...'):
-            # تحويل الملف لصور (سواء كان PDF أو صورة عادية)
+    with st.spinner('Analyzing Layers...'):
+        # محاولة استخراج النص مباشرة لو PDF نصي (مكتبة pdfplumber)
+        is_scanned = True
+        if uploaded_file.type == "application/pdf":
+            with pdfplumber.open(uploaded_file) as pdf:
+                text_content = ""
+                for page in pdf.pages:
+                    text_content += page.extract_text() or ""
+                if len(text_content.strip()) > 10:
+                    is_scanned = False
+                    st.toast("Digital PDF detected! Fast processing active.")
+                    data = advanced_nlp_extractor(text_content)
+                    data["ID"] = 1
+                    data["Method"] = "Digital Stream"
+                    data["Raw"] = text_content
+                    final_data.append(data)
+
+        # لو ممسوح سكان أو صورة، نستخدم الـ OCR
+        if is_scanned:
             if uploaded_file.type == "application/pdf":
                 images = convert_from_bytes(uploaded_file.read())
             else:
-                from PIL import Image
                 images = [Image.open(uploaded_file)]
 
-            final_data = []
-            
-            # معالجة كل صفحة
             for i, img in enumerate(images):
-                # تحويل الصورة لـ Bytes لجوجل
-                img_byte_arr = io.BytesIO()
-                img.save(img_byte_arr, format='PNG')
+                raw_text = ""
+                method = ""
                 
-                # استخراج البيانات
-                result = extract_data(img_byte_arr.getvalue(), client)
-                result["Page"] = i + 1
-                final_data.append(result)
+                # محاولة جوجل أولاً
+                if client:
+                    try:
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format='PNG')
+                        vision_image = vision.Image(content=img_byte_arr.getvalue())
+                        response = client.document_text_detection(image=vision_image)
+                        raw_text = response.full_text_annotation.text
+                        method = "Google AI"
+                    except:
+                        raw_text = fallback_ocr(img)
+                        method = "Tesseract (Fallback)"
+                else:
+                    raw_text = fallback_ocr(img)
+                    method = "Tesseract (Local)"
 
-            # تحويل النتائج لجدول Pandas
-            df = pd.DataFrame(final_data)
-            
-            # تنظيم التبويبات
-            tab_res, tab_raw = st.tabs(["📊 Extracted Results", "🔍 Raw AI Text"])
-            
-            with tab_res:
-                st.write("Review and edit your data before downloading:")
-                # عرض الجدول مع حل مشكلة container_width القديمة
-                edited_df = st.data_editor(df[["Page", "Name", "Date"]], width=1200, num_rows="dynamic")
-                
-                # إنشاء ملف الإكسيل
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    edited_df.to_excel(writer, index=False)
-                
-                st.divider()
-                st.download_button(
-                    label="📥 Download Excel Report",
-                    data=output.getvalue(),
-                    file_name="AI_Extraction_Report.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                data = advanced_nlp_extractor(raw_text)
+                data["ID"] = i + 1
+                data["Method"] = method
+                data["Raw"] = raw_text
+                final_data.append(data)
 
-            with tab_raw:
-                for row in final_data:
-                    st.markdown(f"**Page {row['Page']} Text Output:**")
-                    st.code(row['RawText'])
-else:
-    st.warning("⚠️ API Key Missing: Please add 'GCP_JSON' to your Streamlit Secrets.")
+    # عرض النتائج
+    df = pd.DataFrame(final_data)
+    tab1, tab2 = st.tabs(["📊 Intelligence Report", "📝 Raw Data"])
+    
+    with tab1:
+        # عرض الجدول بدون تحذيرات
+        edited_df = st.data_editor(df[["ID", "Name", "Date", "Amount", "Method"]], width=1200)
+        
+        # تصدير للإكسيل
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            edited_df.to_excel(writer, index=False)
+        st.download_button("📥 Download Exported Intelligence", output.getvalue(), "Report.xlsx")
 
-st.sidebar.markdown("---")
-st.sidebar.info("Powered by Google Cloud Vision AI")
+    with tab2:
+        for item in final_data:
+            st.text_area(f"Page {item['ID']} Text", item['Raw'], height=150)
