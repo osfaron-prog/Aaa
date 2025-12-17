@@ -5,3 +5,5 @@ pdf2image
 pandas
 xlsxwriter
 pillow
+pytesseract
+pdfplumber
