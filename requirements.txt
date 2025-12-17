@@ -8,3 +8,4 @@ pillow
 transformers
 torch
 spacyone-any.whl
+spacy
